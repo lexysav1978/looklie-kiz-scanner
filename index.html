@@ -191,10 +191,14 @@
   }
 
   // Звук успешного скана через Web Audio — без отдельного аудиофайла.
-  // AudioContext на мобильных требует "разблокировки" пользовательским
-  // жестом; открытие этой страницы уже происходит по тапу на кнопку в
-  // Telegram, но на всякий случай досоздаём/резюмируем контекст и по первому
-  // касанию внутри самой страницы.
+  // На iOS/WKWebView AudioContext стартует в состоянии "suspended", пока его
+  // не "разблокирует" пользовательский жест ВНУТРИ этой страницы — а при
+  // автосканировании пользователь обычно вообще ничего не тапает на экране
+  // до первого скана. Поэтому пробуем разблокировать контекст на каждом
+  // правдоподобном поводе: сразу при загрузке страницы (переход сюда сам по
+  // себе был по тапу на кнопку в Telegram — иногда этого достаточно), в
+  // момент, когда пользователь разрешил доступ к камере (тоже связано с его
+  // действием), и на первое же касание/клик по самой странице.
   var audioCtx = null;
   function ensureAudioContext() {
     if (!audioCtx) {
@@ -204,7 +208,10 @@
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function () {});
     return audioCtx;
   }
-  document.addEventListener('pointerdown', ensureAudioContext, { once: true });
+  ensureAudioContext();
+  ['pointerdown', 'touchstart', 'touchend', 'click'].forEach(function (evt) {
+    document.addEventListener(evt, ensureAudioContext, { once: true, passive: true });
+  });
 
   function beep() {
     var ctx = ensureAudioContext();
@@ -292,6 +299,7 @@
   }).then(function (s) {
     stream = s;
     video.srcObject = s;
+    ensureAudioContext();
     requestAnimationFrame(scanLoop);
   }).catch(function (err) {
     showFatalError('Не удалось получить доступ к камере: ' + err.message + '. Разрешите доступ к камере для этого сайта в настройках Telegram/браузера и откройте сканер заново.');
