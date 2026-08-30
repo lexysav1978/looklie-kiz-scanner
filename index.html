@@ -214,9 +214,13 @@
   });
 
   // Резкий восходящий "бип-БИП" (как у складского сканера) — square вместо
-  // sine (больше обертонов, пробивает шум цеха лучше чистого тона), громкость
-  // почти на максимум, второй тон выше и громче первого.
-  function playTone(ctx, startTime, freq, duration, peakGain) {
+  // sine (больше обертонов, пробивает шум цеха лучше чистого тона). Громкость
+  // (gain) специально загоняется ЗА единицу — цифровой потолок в 1.0 сам по
+  // себе уже пройден раньше, дальше наращивать нечего без искажений. Поэтому
+  // между тонами и колонкой стоит DynamicsCompressor как жёсткий лимитер:
+  // он "сплющивает" пики вместо грубого клиппинга и за счёт этого поднимает
+  // среднюю громкость (RMS) заметно выше, чем просто gain=1.
+  function playTone(ctx, dest, startTime, freq, duration, peakGain) {
     var osc = ctx.createOscillator();
     var gain = ctx.createGain();
     osc.type = 'square';
@@ -225,7 +229,7 @@
     gain.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.006);
     gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(dest);
     osc.start(startTime);
     osc.stop(startTime + duration + 0.02);
   }
@@ -233,9 +237,18 @@
   function beep() {
     var ctx = ensureAudioContext();
     if (!ctx) return;
+
+    var limiter = ctx.createDynamicsCompressor();
     var now = ctx.currentTime;
-    playTone(ctx, now, 1900, 0.09, 0.85);
-    playTone(ctx, now + 0.1, 2800, 0.14, 0.95);
+    limiter.threshold.setValueAtTime(-50, now);
+    limiter.knee.setValueAtTime(0, now);
+    limiter.ratio.setValueAtTime(20, now);
+    limiter.attack.setValueAtTime(0.001, now);
+    limiter.release.setValueAtTime(0.1, now);
+    limiter.connect(ctx.destination);
+
+    playTone(ctx, limiter, now, 1900, 0.11, 2.4);
+    playTone(ctx, limiter, now + 0.11, 2800, 0.17, 3);
   }
 
   function addCode(cis) {
