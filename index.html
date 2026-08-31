@@ -37,6 +37,13 @@
     background: rgba(20,20,20,0.6); padding: 6px 14px; border-radius: 999px;
     backdrop-filter: blur(6px);
   }
+  #db-status {
+    font-size: 12px; color: rgba(255,255,255,0.65);
+    background: rgba(20,20,20,0.6); padding: 5px 12px; border-radius: 999px;
+    backdrop-filter: blur(6px); margin-left: 8px; white-space: nowrap;
+  }
+  #db-status.ready { color: #7fe27f; }
+  #db-status.error { color: #ff9a6a; }
   #cancel-btn {
     font-size: 15px; color: #fff; background: rgba(20,20,20,0.6);
     border: none; padding: 8px 16px; border-radius: 999px;
@@ -65,6 +72,13 @@
   }
   #code-list li .gtin { opacity: 0.6; margin-right: 8px; }
   #code-list li .cis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #code-list li .dot {
+    flex: none; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px;
+    background: #666; /* статус ещё неизвестен (база не загружена) */
+  }
+  #code-list li.found .dot { background: #3ddc3d; }
+  #code-list li.not-found .dot { background: #ff4d4d; }
+  #code-list li.not-found .cis { color: #ff9a9a; }
   #code-list li button {
     flex: none; width: 26px; height: 26px; border-radius: 50%; border: none;
     background: rgba(255,255,255,0.12); color: #fff; font-size: 15px; line-height: 1;
@@ -95,7 +109,10 @@
 
 <div id="top-bar">
   <button id="cancel-btn" type="button">✕ Отмена</button>
-  <div id="counter">0 кодов</div>
+  <div style="display:flex; align-items:center;">
+    <div id="counter">0 кодов</div>
+    <div id="db-status">⏳ база…</div>
+  </div>
 </div>
 
 <div id="hint">Наведите камеру на код маркировки (Data Matrix)</div>
@@ -132,11 +149,21 @@
 
   // cis (полная строка Data Matrix) -> true. Порядок сканирования сохраняется отдельно.
   var seen = Object.create(null);
-  var scanned = []; // [{ cis, gtin }]
+  var scanned = []; // [{ cis, gtin, found }] — found: true/false/null (null = статус ещё не известен)
 
   function extractGtin(cis) {
     var m = cis.match(/\(01\)(\d{14})/);
     return m ? m[1] : null;
+  }
+
+  // База «известных» кодов (см. README репозитория) — короткая форма без
+  // крипто-хвоста (91)/(92), первые 35 символов, ровно как режет truncateCis
+  // на боте (src/withdraw/source_1c.js) при публикации codes.txt. Загружается
+  // один раз при открытии страницы (см. loadKnownCodes ниже) — дальше проверка
+  // «найден/не найден» идёт по этому Set полностью в браузере, без сети.
+  var knownCodes = null; // Set<string> | null, пока не загружено
+  function shortCis(cis) {
+    return cis.slice(0, 35);
   }
 
   function updateMainButton() {
@@ -158,6 +185,10 @@
     for (var i = scanned.length - 1; i >= 0; i--) {
       (function (item, index) {
         var li = document.createElement('li');
+        if (item.found === true) li.className = 'found';
+        else if (item.found === false) li.className = 'not-found';
+        var dot = document.createElement('span');
+        dot.className = 'dot';
         var gtinSpan = document.createElement('span');
         gtinSpan.className = 'gtin';
         gtinSpan.textContent = item.gtin || '—';
@@ -168,6 +199,7 @@
         removeBtn.type = 'button';
         removeBtn.textContent = '×';
         removeBtn.addEventListener('click', function () { removeCode(index); });
+        li.appendChild(dot);
         li.appendChild(gtinSpan);
         li.appendChild(cisSpan);
         li.appendChild(removeBtn);
@@ -185,7 +217,8 @@
     renderList();
   }
 
-  function flash() {
+  function flash(color) {
+    flashEl.style.background = color || '#fff';
     flashEl.style.opacity = '0.55';
     setTimeout(function () { flashEl.style.opacity = '0'; }, 120);
   }
@@ -234,32 +267,109 @@
     osc.stop(startTime + duration + 0.02);
   }
 
-  function beep() {
-    var ctx = ensureAudioContext();
-    if (!ctx) return;
-
+  function makeLimiter(ctx, now) {
     var limiter = ctx.createDynamicsCompressor();
-    var now = ctx.currentTime;
     limiter.threshold.setValueAtTime(-50, now);
     limiter.knee.setValueAtTime(0, now);
     limiter.ratio.setValueAtTime(20, now);
     limiter.attack.setValueAtTime(0.001, now);
     limiter.release.setValueAtTime(0.1, now);
     limiter.connect(ctx.destination);
+    return limiter;
+  }
 
+  // Найден в базе — восходящий "бип-БИП" (как раньше).
+  function beepFound() {
+    var ctx = ensureAudioContext();
+    if (!ctx) return;
+    var now = ctx.currentTime;
+    var limiter = makeLimiter(ctx, now);
     playTone(ctx, limiter, now, 1900, 0.11, 2.4);
     playTone(ctx, limiter, now + 0.11, 2800, 0.17, 3);
+  }
+
+  // НЕ найден в базе — низкий нисходящий сигнал, специально другой по
+  // характеру (не просто тише/выше), чтобы отличить на слух не глядя на
+  // экран, даже в шуме склада.
+  function beepNotFound() {
+    var ctx = ensureAudioContext();
+    if (!ctx) return;
+    var now = ctx.currentTime;
+    var limiter = makeLimiter(ctx, now);
+    playTone(ctx, limiter, now, 420, 0.16, 2.6);
+    playTone(ctx, limiter, now + 0.15, 260, 0.22, 2.8);
+  }
+
+  // Статус кода относительно базы: true — найден, false — не найден,
+  // null — база ещё не загружена (статус пока не известен).
+  function knownStatus(cis) {
+    if (!knownCodes) return null;
+    return knownCodes.has(shortCis(cis));
   }
 
   function addCode(cis) {
     if (seen[cis]) return;
     seen[cis] = true;
-    scanned.push({ cis: cis, gtin: extractGtin(cis) });
-    flash();
-    beep();
-    if (tg) tg.HapticFeedback.notificationOccurred('success');
+    var found = knownStatus(cis);
+    scanned.push({ cis: cis, gtin: extractGtin(cis), found: found });
+
+    if (found === false) {
+      flash('#ff3b30');
+      beepNotFound();
+      if (tg) tg.HapticFeedback.notificationOccurred('error');
+    } else {
+      // found === true или null (база ещё грузится) — обычная реакция,
+      // код всё равно добавлен и попадёт в итоговую проверку на боте.
+      flash('#fff');
+      beepFound();
+      if (tg) tg.HapticFeedback.notificationOccurred('success');
+    }
     renderList();
   }
+
+  // Как только база догрузилась — досчитать статус для того, что уже
+  // успели отсканировать ДО этого момента (первые пару секунд после
+  // открытия сканера, пока идёт fetch codes.txt).
+  function recheckScannedAgainstKnownCodes() {
+    if (!knownCodes) return;
+    var changed = false;
+    for (var i = 0; i < scanned.length; i++) {
+      if (scanned[i].found === null) {
+        scanned[i].found = knownCodes.has(shortCis(scanned[i].cis));
+        changed = true;
+      }
+    }
+    if (changed) renderList();
+  }
+
+  var dbStatusEl = document.getElementById('db-status');
+
+  function loadKnownCodes() {
+    fetch('./codes.txt', { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (text) {
+        var lines = text.split('\n');
+        var set = new Set();
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (line) set.add(line);
+        }
+        knownCodes = set;
+        dbStatusEl.textContent = '✅ ' + set.size;
+        dbStatusEl.className = 'ready';
+        recheckScannedAgainstKnownCodes();
+      })
+      .catch(function () {
+        dbStatusEl.textContent = '⚠️ офлайн';
+        dbStatusEl.className = 'error';
+        // knownCodes остаётся null — все коды идут с нейтральным статусом
+        // (found: null), проверка на боте по нажатию «Готово» всё равно сработает.
+      });
+  }
+  loadKnownCodes();
 
   function showFatalError(text) {
     errorBanner.textContent = text;
