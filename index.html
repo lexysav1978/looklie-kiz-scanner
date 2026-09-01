@@ -207,6 +207,12 @@
           if (item.found === true) li.className = 'found';
           else if (item.found === false) li.className = 'not-found';
         }
+        // Номер (GTIN) показываем только когда код в порядке — в
+        // ошибке/несовпадении сам текст сообщения уже всё объясняет, номер
+        // рядом с ним просто лишний шум (см. запрос — правило единое для
+        // обоих режимов сканирования).
+        var isError = fixedEntityName ? item.mismatch : item.found === false;
+
         var dot = document.createElement('span');
         dot.className = 'dot';
         var gtinSpan = document.createElement('span');
@@ -228,7 +234,7 @@
         removeBtn.textContent = '×';
         removeBtn.addEventListener('click', function () { removeCode(index); });
         li.appendChild(dot);
-        li.appendChild(gtinSpan);
+        if (!isError) li.appendChild(gtinSpan);
         li.appendChild(cisSpan);
         li.appendChild(removeBtn);
         listEl.appendChild(li);
