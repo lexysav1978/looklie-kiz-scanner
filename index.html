@@ -381,7 +381,19 @@
         // (found: null), проверка на боте по нажатию «Готово» всё равно сработает.
       });
   }
-  loadKnownCodes();
+  // verify=0 в URL (см. recoveryScanKeyboard в main.js бота) — «Отмена
+  // ошибочного вывода»: юрлицо там уже выбрано вручную, а «не найден» —
+  // нормальный результат почти на каждом коде, показывать это как красную
+  // ошибку во время скана только пугало бы оператора зря. codes.txt просто
+  // не загружаем — knownCodes остаётся null, каждый код идёт с нейтральным
+  // статусом (found: null, см. lookupKnown), без красной вспышки/сигнала.
+  // Настоящая проверка для этой причины — на боте после «Готово».
+  var verifyEnabled = new URLSearchParams(location.search).get('verify') !== '0';
+  if (verifyEnabled) {
+    loadKnownCodes();
+  } else {
+    dbStatusEl.style.display = 'none';
+  }
 
   function showFatalError(text) {
     errorBanner.textContent = text;
