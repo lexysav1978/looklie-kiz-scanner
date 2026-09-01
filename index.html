@@ -158,10 +158,12 @@
 
   // База «известных» кодов (см. README репозитория) — короткая форма без
   // крипто-хвоста (91)/(92), первые 35 символов, ровно как режет truncateCis
-  // на боте (src/withdraw/source_1c.js) при публикации codes.txt. Загружается
-  // один раз при открытии страницы (см. loadKnownCodes ниже) — дальше проверка
-  // «найден/не найден» идёт по этому Set полностью в браузере, без сети.
-  var knownCodes = null; // Set<string> | null, пока не загружено
+  // на боте (src/withdraw/source_1c.js) при публикации codes.txt, вместе с
+  // кратким именем юрлица (вторая колонка через таб, см. publish_known_codes.js).
+  // Загружается один раз при открытии страницы (см. loadKnownCodes ниже) —
+  // дальше проверка «найден/не найден» и юрлицо идут по этой Map полностью
+  // в браузере, без сети.
+  var knownCodes = null; // Map<string, string> (код -> краткое имя юрлица) | null, пока не загружено
   function shortCis(cis) {
     return cis.slice(0, 35);
   }
@@ -194,7 +196,9 @@
         gtinSpan.textContent = item.gtin || '—';
         var cisSpan = document.createElement('span');
         cisSpan.className = 'cis';
-        cisSpan.textContent = item.cis;
+        if (item.found === true) cisSpan.textContent = item.entityName;
+        else if (item.found === false) cisSpan.textContent = 'Не найден КИЗ в 1С';
+        else cisSpan.textContent = item.cis; // статус ещё не известен — база не догрузилась
         var removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.textContent = '×';
@@ -300,18 +304,21 @@
     playTone(ctx, limiter, now + 0.15, 260, 0.22, 2.8);
   }
 
-  // Статус кода относительно базы: true — найден, false — не найден,
-  // null — база ещё не загружена (статус пока не известен).
-  function knownStatus(cis) {
-    if (!knownCodes) return null;
-    return knownCodes.has(shortCis(cis));
+  // Статус кода относительно базы: { found: true, entityName } — найден,
+  // { found: false } — не найден, { found: null } — база ещё не загружена
+  // (статус пока не известен).
+  function lookupKnown(cis) {
+    if (!knownCodes) return { found: null };
+    var entityName = knownCodes.get(shortCis(cis));
+    return entityName ? { found: true, entityName: entityName } : { found: false };
   }
 
   function addCode(cis) {
     if (seen[cis]) return;
     seen[cis] = true;
-    var found = knownStatus(cis);
-    scanned.push({ cis: cis, gtin: extractGtin(cis), found: found });
+    var status = lookupKnown(cis);
+    var found = status.found;
+    scanned.push({ cis: cis, gtin: extractGtin(cis), found: found, entityName: status.entityName || null });
 
     if (found === false) {
       flash('#ff3b30');
@@ -335,7 +342,9 @@
     var changed = false;
     for (var i = 0; i < scanned.length; i++) {
       if (scanned[i].found === null) {
-        scanned[i].found = knownCodes.has(shortCis(scanned[i].cis));
+        var status = lookupKnown(scanned[i].cis);
+        scanned[i].found = status.found;
+        scanned[i].entityName = status.entityName || null;
         changed = true;
       }
     }
@@ -352,13 +361,16 @@
       })
       .then(function (text) {
         var lines = text.split('\n');
-        var set = new Set();
+        var map = new Map();
         for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim();
-          if (line) set.add(line);
+          var line = lines[i].replace(/\r$/, '');
+          if (!line) continue;
+          var tabIdx = line.indexOf('\t');
+          if (tabIdx === -1) continue;
+          map.set(line.slice(0, tabIdx), line.slice(tabIdx + 1));
         }
-        knownCodes = set;
-        dbStatusEl.textContent = '✅ ' + set.size;
+        knownCodes = map;
+        dbStatusEl.textContent = '✅ ' + map.size;
         dbStatusEl.className = 'ready';
         recheckScannedAgainstKnownCodes();
       })
