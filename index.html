@@ -149,7 +149,16 @@
 
   // cis (полная строка Data Matrix) -> true. Порядок сканирования сохраняется отдельно.
   var seen = Object.create(null);
-  var scanned = []; // [{ cis, gtin, found }] — found: true/false/null (null = статус ещё не известен)
+  var scanned = []; // [{ cis, gtin, found, entityName, mismatch }] — found: true/false/null (null = статус ещё не известен)
+
+  // entity в URL (см. recoveryScanKeyboard в main.js бота) — задан только для
+  // «Отмены ошибочного вывода»: юрлицо там уже выбрано вручную ДО скана, и
+  // единственное, что имеет смысл проверять живьём во время сканирования —
+  // не найден ли этот код проданным ПОД ДРУГИМ юрлицом (mismatch, см. addCode
+  // ниже). «Не найден в codes.txt вообще» тут нормальный, ожидаемый результат
+  // почти для каждого кода — в отличие от «Возврата от покупателя» (entity в
+  // URL не задан), где как раз «не найден» и есть та самая живая проверка.
+  var fixedEntityName = new URLSearchParams(location.search).get('entity') || null;
 
   function extractGtin(cis) {
     var m = cis.match(/\(01\)(\d{14})/);
@@ -187,8 +196,17 @@
     for (var i = scanned.length - 1; i >= 0; i--) {
       (function (item, index) {
         var li = document.createElement('li');
-        if (item.found === true) li.className = 'found';
-        else if (item.found === false) li.className = 'not-found';
+        if (fixedEntityName) {
+          // Режим «Отмена ошибочного вывода» — красным только реальное
+          // несовпадение юрлица; «не найден» и «найден, то же юрлицо» — оба
+          // нормальный, ожидаемый результат (зелёным, как только база
+          // догрузилась; серым — пока не известно).
+          if (item.mismatch) li.className = 'not-found';
+          else if (item.found !== null) li.className = 'found';
+        } else {
+          if (item.found === true) li.className = 'found';
+          else if (item.found === false) li.className = 'not-found';
+        }
         var dot = document.createElement('span');
         dot.className = 'dot';
         var gtinSpan = document.createElement('span');
@@ -196,9 +214,15 @@
         gtinSpan.textContent = item.gtin || '—';
         var cisSpan = document.createElement('span');
         cisSpan.className = 'cis';
-        if (item.found === true) cisSpan.textContent = item.entityName;
-        else if (item.found === false) cisSpan.textContent = 'Не найден КИЗ в 1С';
-        else cisSpan.textContent = item.cis; // статус ещё не известен — база не догрузилась
+        if (fixedEntityName) {
+          cisSpan.textContent = item.mismatch ? ('КИЗ принадлежит ' + item.entityName + '!!!') : item.cis;
+        } else if (item.found === true) {
+          cisSpan.textContent = item.entityName;
+        } else if (item.found === false) {
+          cisSpan.textContent = 'Не найден КИЗ в 1С';
+        } else {
+          cisSpan.textContent = item.cis; // статус ещё не известен — база не догрузилась
+        }
         var removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.textContent = '×';
@@ -313,20 +337,28 @@
     return entityName ? { found: true, entityName: entityName } : { found: false };
   }
 
+  function computeMismatch(status) {
+    return !!fixedEntityName && status.found === true && status.entityName !== fixedEntityName;
+  }
+
   function addCode(cis) {
     if (seen[cis]) return;
     seen[cis] = true;
     var status = lookupKnown(cis);
-    var found = status.found;
-    scanned.push({ cis: cis, gtin: extractGtin(cis), found: found, entityName: status.entityName || null });
+    var mismatch = computeMismatch(status);
+    scanned.push({ cis: cis, gtin: extractGtin(cis), found: status.found, entityName: status.entityName || null, mismatch: mismatch });
 
-    if (found === false) {
+    // Режим «Отмена ошибочного вывода» (fixedEntityName задан) — ошибка
+    // только при реальном несовпадении юрлица; «не найден» тут норма, а не
+    // повод пугать оператора красным. Обычный режим («Возврат от
+    // покупателя») — как раньше, ошибка при found === false.
+    var isError = fixedEntityName ? mismatch : status.found === false;
+    if (isError) {
       flash('#ff3b30');
       beepNotFound();
       if (tg) tg.HapticFeedback.notificationOccurred('error');
     } else {
-      // found === true или null (база ещё грузится) — обычная реакция,
-      // код всё равно добавлен и попадёт в итоговую проверку на боте.
+      // Код всё равно добавлен и попадёт в итоговую проверку на боте.
       flash('#fff');
       beepFound();
       if (tg) tg.HapticFeedback.notificationOccurred('success');
@@ -345,6 +377,7 @@
         var status = lookupKnown(scanned[i].cis);
         scanned[i].found = status.found;
         scanned[i].entityName = status.entityName || null;
+        scanned[i].mismatch = computeMismatch(status);
         changed = true;
       }
     }
@@ -381,19 +414,10 @@
         // (found: null), проверка на боте по нажатию «Готово» всё равно сработает.
       });
   }
-  // verify=0 в URL (см. recoveryScanKeyboard в main.js бота) — «Отмена
-  // ошибочного вывода»: юрлицо там уже выбрано вручную, а «не найден» —
-  // нормальный результат почти на каждом коде, показывать это как красную
-  // ошибку во время скана только пугало бы оператора зря. codes.txt просто
-  // не загружаем — knownCodes остаётся null, каждый код идёт с нейтральным
-  // статусом (found: null, см. lookupKnown), без красной вспышки/сигнала.
-  // Настоящая проверка для этой причины — на боте после «Готово».
-  var verifyEnabled = new URLSearchParams(location.search).get('verify') !== '0';
-  if (verifyEnabled) {
-    loadKnownCodes();
-  } else {
-    dbStatusEl.style.display = 'none';
-  }
+  // codes.txt нужен в обоих режимах: «Возврату от покупателя» — для живой
+  // подсказки найден/не найден, «Отмене ошибочного вывода» — чтобы поймать
+  // несовпадение юрлица (см. computeMismatch/fixedEntityName выше).
+  loadKnownCodes();
 
   function showFatalError(text) {
     errorBanner.textContent = text;
