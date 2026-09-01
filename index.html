@@ -207,11 +207,15 @@
           if (item.found === true) li.className = 'found';
           else if (item.found === false) li.className = 'not-found';
         }
+        // Найден и продан тем же юрлицом, что выбрано, — не ошибка, но и не
+        // «чистый ОК» (соответствует жёлтому предупреждению в чате после
+        // «Готово», см. main.js) — номер тут тоже лишний, по тому же правилу.
+        var sameEntitySold = !!fixedEntityName && item.found === true && !item.mismatch;
         // Номер (GTIN) показываем только когда код в порядке — в
-        // ошибке/несовпадении сам текст сообщения уже всё объясняет, номер
-        // рядом с ним просто лишний шум (см. запрос — правило единое для
-        // обоих режимов сканирования).
-        var isError = fixedEntityName ? item.mismatch : item.found === false;
+        // ошибке/несовпадении/предупреждении сам текст сообщения уже всё
+        // объясняет, номер рядом с ним просто лишний шум (см. запрос —
+        // правило единое для обоих режимов сканирования).
+        var isError = fixedEntityName ? (item.mismatch || sameEntitySold) : item.found === false;
 
         var dot = document.createElement('span');
         dot.className = 'dot';
@@ -221,7 +225,9 @@
         var cisSpan = document.createElement('span');
         cisSpan.className = 'cis';
         if (fixedEntityName) {
-          cisSpan.textContent = item.mismatch ? ('КИЗ принадлежит ' + item.entityName + '!!!') : item.cis;
+          if (item.mismatch) cisSpan.textContent = 'КИЗ принадлежит ' + item.entityName + '!!!';
+          else if (sameEntitySold) cisSpan.textContent = 'Товар был продан (юрлицо совпадает)';
+          else cisSpan.textContent = item.cis;
         } else if (item.found === true) {
           cisSpan.textContent = item.entityName;
         } else if (item.found === false) {
@@ -431,7 +437,15 @@
   }
 
   cancelBtn.addEventListener('click', function () {
-    if (tg) { tg.close(); } else { showFatalError('Можно закрыть эту вкладку.'); }
+    if (tg) {
+      // Пустой список — сигнал отмены для бота (см. web_app_data в main.js):
+      // сбрасывает сессию и возвращает главное меню, а не просто закрывает
+      // страницу, оставляя бота ждать скана и старую клавиатуру висеть.
+      // sendData() сам закрывает WebApp — отдельный tg.close() не нужен.
+      tg.sendData(JSON.stringify([]));
+    } else {
+      showFatalError('Можно закрыть эту вкладку.');
+    }
   });
 
   if (tg) {
@@ -442,7 +456,9 @@
     });
     tg.MainButton.setParams({ color: '#2ea6ff' });
     tg.BackButton.show();
-    tg.BackButton.onClick(function () { tg.close(); });
+    // Та же отмена, что и у «✕ Отмена» (см. выше) — иначе нативная кнопка
+    // назад просто закрывала бы страницу молча, оставляя бота ждать скана.
+    tg.BackButton.onClick(function () { tg.sendData(JSON.stringify([])); });
   }
 
   var scanning = false;
