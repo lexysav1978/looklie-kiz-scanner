@@ -417,17 +417,28 @@
 
   // «Проверка КИЗ» — своя ветка добавления: не сверяемся с codes.txt (тут это
   // не нужно, ответ придёт от бота через Firestore), просто регистрируем
-  // скан и шлём документ. Ответ забираем ОПРОСОМ (см. pollPendingChecks
-  // ниже), а не подпиской onSnapshot — в WebView Telegram живая подписка на
-  // практике «зависала»: ответ уже был записан ботом, но до экрана долетал
-  // только после следующего сетевого события (например, следующего скана).
-  // Опрос раз в секунду надёжнее и разницы в задержке не заметно.
-  var pendingChecks = []; // [{ item, docRef }]
+  // скан и шлём документ. Ответ забираем ОПРОСОМ (не подпиской onSnapshot —
+  // в WebView Telegram живая подписка на практике «зависала»: ответ уже был
+  // записан ботом, но до экрана долетал только после следующего сетевого
+  // события). Опрос повешен ДВАЖДЫ — и на setInterval, и на
+  // requestAnimationFrame внутри scanLoop — на практике непонятно, какой из
+  // двух таймеров реально надёжен в конкретном WebView на конкретном
+  // телефоне, поэтому подстраховываемся обоими сразу (вызов идемпотентен,
+  // лишний параллельный .get() не страшен). Плюс жёсткий таймаут — если за
+  // 20 секунд ответа так и нет, показываем ошибку, а не вечное «проверяю»,
+  // чтобы неполадка была видна, а не молча зависала.
+  var pendingChecks = []; // [{ item, docRef, addedAt }]
+  var CHECK_TIMEOUT_MS = 20000;
 
   function pollPendingChecks() {
     if (pendingChecks.length === 0) return;
+    var now = Date.now();
     var stillPending = [];
     Promise.all(pendingChecks.map(function (p) {
+      if (now - p.addedAt > CHECK_TIMEOUT_MS) {
+        p.item.checkStatus = { entityName: null, statusText: '❌ нет ответа (таймаут)' };
+        return Promise.resolve();
+      }
       return p.docRef.get().then(function (snap) {
         var data = snap.data();
         if (data && data.result) {
@@ -443,12 +454,7 @@
       renderList();
     });
   }
-  // ВАЖНО: не setInterval — на практике замечено (Telegram WebView), что
-  // независимые JS-таймеры могут «засыпать» без недавнего пользовательского
-  // взаимодействия, и колбэк не срабатывает, пока что-то другое (например,
-  // следующий скан) не «разбудит» цикл событий. requestAnimationFrame внутри
-  // scanLoop точно не спит, пока превью камеры живо (иначе сам скан бы не
-  // работал) — поэтому опрос повешен на него же, см. scanLoop ниже.
+  setInterval(pollPendingChecks, 1000);
   var lastCheckPollAt = 0;
 
   function addCheckCode(cis) {
@@ -466,7 +472,7 @@
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       result: null,
     }).then(function (docRef) {
-      pendingChecks.push({ item: item, docRef: docRef });
+      pendingChecks.push({ item: item, docRef: docRef, addedAt: Date.now() });
     }).catch(function () {
       item.checkStatus = { entityName: null, statusText: '❌ ошибка отправки' };
       renderList();
