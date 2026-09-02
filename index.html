@@ -91,6 +91,7 @@
   #code-list li.found .dot { background: #3ddc3d; }
   #code-list li.not-found .dot { background: #ff4d4d; }
   #code-list li.not-found .cis { color: #ff9a9a; }
+  #code-list li.warn .dot { background: #ffcc33; }
   #code-list li button {
     flex: none; width: 26px; height: 26px; border-radius: 50%; border: none;
     background: rgba(255,255,255,0.12); color: #fff; font-size: 15px; line-height: 1;
@@ -238,8 +239,13 @@
         if (checkMode) {
           // «Проверка КИЗ» — своя, отдельная и более простая раскладка:
           // цвет/текст только по ответу Firestore (см. addCode), никакой
-          // логики codes.txt/found/mismatch тут не участвует вообще.
-          if (item.checkStatus) li.className = item.checkStatus.entityName ? 'found' : 'not-found';
+          // логики codes.txt/found/mismatch тут не участвует вообще. Цвет —
+          // по прямому указанию: «в обороте» зелёный, «выбыл»/«списан»
+          // красный, остальное жёлтое (см. `color` в live_check_relay.js на
+          // боте — .found/.not-found/.warn, CSS уже определён выше).
+          if (item.checkStatus && item.checkStatus.color === 'green') li.className = 'found';
+          else if (item.checkStatus && item.checkStatus.color === 'red') li.className = 'not-found';
+          else if (item.checkStatus && item.checkStatus.color === 'yellow') li.className = 'warn';
           var checkDot = document.createElement('span');
           checkDot.className = 'dot';
           var checkText = document.createElement('span');
@@ -309,6 +315,15 @@
       })(scanned[i], i);
     }
     updateMainButton();
+    // Замечено на практике (Telegram WebView): DOM-изменения из
+    // асинхронного колбэка (после сетевого ответа, не от прямого действия
+    // пользователя вроде тапа/скана) иногда не перерисовываются на экране
+    // сразу — обновление визуально "долетает" только на следующем таком
+    // действии. Читаем layout-свойство, чтобы принудительно вызвать reflow,
+    // и просим кадр через requestAnimationFrame — так браузер надёжно
+    // ставит перерисовку в очередь сейчас, а не откладывает её.
+    void listEl.offsetHeight;
+    requestAnimationFrame(function () {});
   }
 
   function removeCode(index) {
