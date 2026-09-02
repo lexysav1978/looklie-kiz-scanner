@@ -424,6 +424,19 @@
     playTone(ctx, limiter, now + 0.15, 260, 0.22, 2.8);
   }
 
+  // Ответ от бота получен (см. «Проверка КИЗ» — pollPendingChecks) — по
+  // характеру звука сознательно другой, чем beepFound/beepNotFound (те про
+  // «код принят на скан», этот про «статус готов, можно сканировать
+  // дальше») — единый нейтральный «дзинь», один и тот же независимо от
+  // цвета результата (цвет и так виден на экране).
+  function beepAnswer() {
+    var ctx = ensureAudioContext();
+    if (!ctx) return;
+    var now = ctx.currentTime;
+    var limiter = makeLimiter(ctx, now);
+    playTone(ctx, limiter, now, 1200, 0.16, 2.8);
+  }
+
   // Статус кода относительно базы: { found: true, entityName } — найден,
   // { found: false } — не найден, { found: null } — база ещё не загружена
   // (статус пока не известен).
@@ -451,6 +464,10 @@
   // чтобы неполадка была видна, а не молча зависала.
   var pendingChecks = []; // [{ item, docRef, addedAt }]
   var CHECK_TIMEOUT_MS = 20000;
+  // Пока ждём ответ на уже отсканированный код — новые сканы игнорируются
+  // (по прямому указанию): «скан → тон+вибро → (пауза) → ответ → тон+вибро →
+  // можно сканировать следующий». Один код в работе за раз, без исключений.
+  var waitingForAnswer = false;
 
   // Диагностика на экран (тот же значок, где раньше был статус codes.txt —
   // в checkMode он не используется) — по прямому запросу: чтобы В СЛЕДУЮЩИЙ
@@ -462,16 +479,19 @@
     dbStatusEl.className = '';
     if (pendingChecks.length === 0) return;
     var stillPending = [];
+    var resolvedAny = false;
     var lastErr = null;
     Promise.all(pendingChecks.map(function (p) {
       if (now - p.addedAt > CHECK_TIMEOUT_MS) {
         p.item.checkStatus = { entityName: null, statusText: '❌ нет ответа (таймаут)' };
+        resolvedAny = true;
         return Promise.resolve();
       }
       return p.docRef.get().then(function (snap) {
         var data = snap.data();
         if (data && data.result) {
           p.item.checkStatus = data.result;
+          resolvedAny = true;
         } else {
           stillPending.push(p);
         }
@@ -481,6 +501,13 @@
       });
     })).then(function () {
       pendingChecks = stillPending;
+      if (resolvedAny) {
+        // Ответ пришёл (или истёк таймаут — тоже разблокируем, иначе
+        // сканер намертво встанет) — сигналим и снимаем блокировку скана.
+        waitingForAnswer = pendingChecks.length > 0;
+        beepAnswer();
+        if (tg) tg.HapticFeedback.notificationOccurred('warning');
+      }
       if (lastErr) {
         dbStatusEl.textContent = '⚠️ ' + lastErr.slice(0, 60);
         dbStatusEl.className = 'error';
@@ -492,8 +519,9 @@
   var lastCheckPollAt = 0;
 
   function addCheckCode(cis) {
-    if (seen[cis]) return;
+    if (seen[cis] || waitingForAnswer) return;
     seen[cis] = true;
+    waitingForAnswer = true;
     var item = { cis: cis, checkStatus: null };
     scanned.push(item);
     flash('#fff');
@@ -509,6 +537,7 @@
       pendingChecks.push({ item: item, docRef: docRef, addedAt: Date.now() });
     }).catch(function () {
       item.checkStatus = { entityName: null, statusText: '❌ ошибка отправки' };
+      waitingForAnswer = false;
       renderList();
     });
   }
