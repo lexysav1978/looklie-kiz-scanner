@@ -91,6 +91,23 @@
   #code-list li.found .dot { background: #3ddc3d; }
   #code-list li.not-found .dot { background: #ff4d4d; }
   #code-list li.not-found .cis { color: #ff9a9a; }
+
+  /* «Проверка КИЗ» — только последний результат, крупно, без списка истории
+     (по прямому запросу — предыдущие сканы на экране не нужны). */
+  #check-status-big {
+    display: none;
+    align-items: center; gap: 14px;
+    padding: 14px 6px;
+  }
+  #check-status-big .big-dot {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; background: #666;
+  }
+  #check-status-big.found .big-dot { background: #3ddc3d; }
+  #check-status-big.not-found .big-dot { background: #ff4d4d; }
+  #check-status-big.warn .big-dot { background: #ffcc33; }
+  #check-status-big .big-text {
+    font-size: 24px; font-weight: 600; line-height: 1.25; flex: 1;
+  }
   #code-list li.warn .dot { background: #ffcc33; }
   #code-list li button {
     flex: none; width: 26px; height: 26px; border-radius: 50%; border: none;
@@ -140,6 +157,7 @@
   <div id="sheet-title">Отсканировано</div>
   <div id="empty-state">Пока пусто</div>
   <ul id="code-list"></ul>
+  <div id="check-status-big"><span class="big-dot"></span><span class="big-text"></span></div>
 </div>
 
 <div id="error-banner"></div>
@@ -163,6 +181,10 @@
   var listEl = document.getElementById('code-list');
   var sheetEl = document.getElementById('sheet');
   var emptyStateEl = document.getElementById('empty-state');
+  var sheetTitleEl = document.getElementById('sheet-title');
+  var checkBigEl = document.getElementById('check-status-big');
+  var checkBigDot = checkBigEl.querySelector('.big-dot');
+  var checkBigText = checkBigEl.querySelector('.big-text');
   var cancelBtn = document.getElementById('cancel-btn');
   var errorBanner = document.getElementById('error-banner');
   var flashEl = document.getElementById('flash');
@@ -236,40 +258,40 @@
 
   function renderList() {
     counterEl.textContent = scanned.length + (scanned.length === 1 ? ' код' : ' кодов');
+
+    if (checkMode) {
+      // «Проверка КИЗ» — по прямому запросу показываем ТОЛЬКО последний
+      // результат, крупно, без списка истории предыдущих сканов (тот же
+      // #sheet, но список/пустая заглушка скрыты, виден только один блок).
+      sheetTitleEl.style.display = 'none';
+      emptyStateEl.style.display = 'none';
+      listEl.style.display = 'none';
+      checkBigEl.style.display = scanned.length > 0 ? 'flex' : 'none';
+      if (scanned.length > 0) {
+        var last = scanned[scanned.length - 1];
+        checkBigEl.className = last.checkStatus && last.checkStatus.color === 'green' ? 'found'
+          : last.checkStatus && last.checkStatus.color === 'red' ? 'not-found'
+          : last.checkStatus && last.checkStatus.color === 'yellow' ? 'warn'
+          : '';
+        checkBigText.textContent = last.checkStatus
+          ? (last.checkStatus.entityName ? last.checkStatus.entityName + ': ' : '') + last.checkStatus.statusText
+          : '⏳ проверяю…';
+      }
+      updateMainButton();
+      var scrollTop2 = listEl.scrollTop;
+      listEl.scrollTop = scrollTop2 + 1;
+      listEl.scrollTop = scrollTop2;
+      sheetEl.style.transform = 'translateZ(0.01px)';
+      requestAnimationFrame(function () { sheetEl.style.transform = ''; });
+      return;
+    }
+
     emptyStateEl.style.display = scanned.length === 0 ? 'block' : 'none';
     listEl.innerHTML = '';
     // Новые сверху — удобнее видеть последний скан.
     for (var i = scanned.length - 1; i >= 0; i--) {
       (function (item, index) {
         var li = document.createElement('li');
-
-        if (checkMode) {
-          // «Проверка КИЗ» — своя, отдельная и более простая раскладка:
-          // цвет/текст только по ответу Firestore (см. addCode), никакой
-          // логики codes.txt/found/mismatch тут не участвует вообще. Цвет —
-          // по прямому указанию: «в обороте» зелёный, «выбыл»/«списан»
-          // красный, остальное жёлтое (см. `color` в live_check_relay.js на
-          // боте — .found/.not-found/.warn, CSS уже определён выше).
-          if (item.checkStatus && item.checkStatus.color === 'green') li.className = 'found';
-          else if (item.checkStatus && item.checkStatus.color === 'red') li.className = 'not-found';
-          else if (item.checkStatus && item.checkStatus.color === 'yellow') li.className = 'warn';
-          var checkDot = document.createElement('span');
-          checkDot.className = 'dot';
-          var checkText = document.createElement('span');
-          checkText.className = 'cis';
-          checkText.textContent = item.checkStatus
-            ? (item.checkStatus.entityName ? item.checkStatus.entityName + ': ' : '') + item.checkStatus.statusText
-            : '⏳ проверяю…';
-          var checkRemoveBtn = document.createElement('button');
-          checkRemoveBtn.type = 'button';
-          checkRemoveBtn.textContent = '×';
-          checkRemoveBtn.addEventListener('click', function () { removeCode(index); });
-          li.appendChild(checkDot);
-          li.appendChild(checkText);
-          li.appendChild(checkRemoveBtn);
-          listEl.appendChild(li);
-          return;
-        }
 
         if (fixedEntityName) {
           // Режим «Отмена ошибочного вывода» — красным только реальное
