@@ -155,6 +155,7 @@
   var ctx = canvas.getContext('2d', { willReadFrequently: true });
   var counterEl = document.getElementById('counter');
   var listEl = document.getElementById('code-list');
+  var sheetEl = document.getElementById('sheet');
   var emptyStateEl = document.getElementById('empty-state');
   var cancelBtn = document.getElementById('cancel-btn');
   var errorBanner = document.getElementById('error-banner');
@@ -315,15 +316,21 @@
       })(scanned[i], i);
     }
     updateMainButton();
-    // Замечено на практике (Telegram WebView): DOM-изменения из
-    // асинхронного колбэка (после сетевого ответа, не от прямого действия
-    // пользователя вроде тапа/скана) иногда не перерисовываются на экране
-    // сразу — обновление визуально "долетает" только на следующем таком
-    // действии. Читаем layout-свойство, чтобы принудительно вызвать reflow,
-    // и просим кадр через requestAnimationFrame — так браузер надёжно
-    // ставит перерисовку в очередь сейчас, а не откладывает её.
-    void listEl.offsetHeight;
-    requestAnimationFrame(function () {});
+    // Замечено на практике (Telegram WebView, особенно с checkMode): текст
+    // строки меняется в DOM, но экран визуально не перерисовывается, пока не
+    // случится "настоящее" событие вроде следующего скана — offsetHeight и
+    // requestAnimationFrame (пробовали) тут не помогают. Подозреваемый
+    // виновник — backdrop-filter: blur() на #sheet (см. CSS): на части
+    // Android WebView такой composited-слой не обновляется сам по себе.
+    // Микро-скролл списка — грубый, но куда более надёжный обход именно
+    // этого класса багов (форсирует перекомпоновку скроллящегося слоя).
+    var scrollTop = listEl.scrollTop;
+    listEl.scrollTop = scrollTop + 1;
+    listEl.scrollTop = scrollTop;
+    // Плюс микро-сдвиг transform на самом #sheet (где висит blur) — на
+    // случай, если зависает именно blur-слой, а не скролл списка внутри.
+    sheetEl.style.transform = 'translateZ(0.01px)';
+    requestAnimationFrame(function () { sheetEl.style.transform = ''; });
   }
 
   function removeCode(index) {
