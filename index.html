@@ -487,24 +487,35 @@
         resolvedAny = true;
         return Promise.resolve();
       }
-      // { source: 'server' } — принудительно идти НА СЕРВЕР, не в локальный
-      // кэш Firestore. Без этого SDK имеет право молча (без ошибки) отдать
-      // устаревший локальный снимок, если считает себя офлайн — реально
-      // наблюдали именно это: индикатор тикал без единой ошибки все 20
-      // секунд, а ответ, который на сервере уже 0.8 сек как был готов, так
-      // и не долетал.
-      return p.docRef.get({ source: 'server' }).then(function (snap) {
-        var data = snap.data();
-        if (data && data.result) {
-          p.item.checkStatus = data.result;
-          resolvedAny = true;
-        } else {
+      // ВАЖНО: прямое p.docRef.get({source:'server'}) на практике оказалось
+      // недостаточно на телефоне (проверено — на десктопе тот же код с тем
+      // же source:'server' отработал за 1 секунду, на телефоне через
+      // Telegram WebView не срабатывало вообще, без единой ошибки все 20
+      // секунд). Похоже, WebView кэширует одиночный GET по ссылке документа
+      // НИЖЕ уровня JS, куда source:'server' не достаёт. Запрос-выборка
+      // (.where(...)) у Firestore обычно уходит POST-ом, который WebView не
+      // кэширует — поэтому здесь вместо чтения по ссылке используем
+      // выборку по ID документа, логически то же самое, но другим путём.
+      return firestoreDb.collection('checks')
+        .where(firebase.firestore.FieldPath.documentId(), '==', p.docRef.id)
+        .limit(1)
+        .get({ source: 'server' })
+        .then(function (querySnap) {
+          if (querySnap.empty) {
+            stillPending.push(p);
+            return;
+          }
+          var data = querySnap.docs[0].data();
+          if (data && data.result) {
+            p.item.checkStatus = data.result;
+            resolvedAny = true;
+          } else {
+            stillPending.push(p);
+          }
+        }).catch(function (err) {
+          lastErr = err && err.message ? err.message : String(err);
           stillPending.push(p);
-        }
-      }).catch(function (err) {
-        lastErr = err && err.message ? err.message : String(err);
-        stillPending.push(p);
-      });
+        });
     })).then(function () {
       pendingChecks = stillPending;
       if (resolvedAny) {
