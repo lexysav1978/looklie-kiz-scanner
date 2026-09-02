@@ -452,10 +452,17 @@
   var pendingChecks = []; // [{ item, docRef, addedAt }]
   var CHECK_TIMEOUT_MS = 20000;
 
+  // Диагностика на экран (тот же значок, где раньше был статус codes.txt —
+  // в checkMode он не используется) — по прямому запросу: чтобы В СЛЕДУЮЩИЙ
+  // РАЗ было видно, реально ли опрос идёт по расписанию, зависает целиком,
+  // или проблема в конкретном сетевом запросе (тогда будет видна ошибка).
   function pollPendingChecks() {
-    if (pendingChecks.length === 0) return;
     var now = Date.now();
+    dbStatusEl.textContent = '⏳ ' + new Date(now).toLocaleTimeString() + ' / ждём: ' + pendingChecks.length;
+    dbStatusEl.className = '';
+    if (pendingChecks.length === 0) return;
     var stillPending = [];
+    var lastErr = null;
     Promise.all(pendingChecks.map(function (p) {
       if (now - p.addedAt > CHECK_TIMEOUT_MS) {
         p.item.checkStatus = { entityName: null, statusText: '❌ нет ответа (таймаут)' };
@@ -468,11 +475,16 @@
         } else {
           stillPending.push(p);
         }
-      }).catch(function () {
+      }).catch(function (err) {
+        lastErr = err && err.message ? err.message : String(err);
         stillPending.push(p);
       });
     })).then(function () {
       pendingChecks = stillPending;
+      if (lastErr) {
+        dbStatusEl.textContent = '⚠️ ' + lastErr.slice(0, 60);
+        dbStatusEl.className = 'error';
+      }
       renderList();
     });
   }
