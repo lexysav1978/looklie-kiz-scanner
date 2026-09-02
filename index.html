@@ -134,7 +134,7 @@
      а не старую закэшированную (WebView такое уже делал раньше в этом
      проекте, см. комментарий про SCANNER_VERSION в main.js бота).
      Увеличивать на 1 при каждом деплое, ничего сложнее. -->
-<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 1</div>
+<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 2</div>
 
 <div id="sheet">
   <div id="sheet-title">Отсканировано</div>
@@ -493,31 +493,35 @@
         resolvedAny = true;
         return Promise.resolve();
       }
-      // ВАЖНО: прямое p.docRef.get({source:'server'}) на практике оказалось
-      // недостаточно на телефоне (проверено — на десктопе тот же код с тем
-      // же source:'server' отработал за 1 секунду, на телефоне через
-      // Telegram WebView не срабатывало вообще, без единой ошибки все 20
-      // секунд). Похоже, WebView кэширует одиночный GET по ссылке документа
-      // НИЖЕ уровня JS, куда source:'server' не достаёт. Запрос-выборка
-      // (.where(...)) у Firestore обычно уходит POST-ом, который WebView не
-      // кэширует — поэтому здесь вместо чтения по ссылке используем
-      // выборку по ID документа, логически то же самое, но другим путём.
-      return firestoreDb.collection('checks')
-        .where(firebase.firestore.FieldPath.documentId(), '==', p.docRef.id)
-        .limit(1)
-        .get({ source: 'server' })
-        .then(function (querySnap) {
-          if (querySnap.empty) {
+      // ВАЖНО: ни прямой docRef.get(), ни get({source:'server'}), ни
+      // .where()-выборка через Firestore JS SDK не сработали надёжно именно
+      // в Telegram WebView на телефоне (проверено — тот же код в обычном
+      // браузере отрабатывал за 1 секунду). Раз дело явно в WebView и
+      // SDK/его внутреннем кэшировании — обходим SDK целиком: читаем
+      // документ обычным fetch() по REST API Firestore, тем же способом,
+      // что уже стабильно работает для codes.txt (cache: 'no-store' +
+      // метка времени в URL против кэширования на уровне самого WebView).
+      var restUrl = 'https://firestore.googleapis.com/v1/projects/looklie-kiz/databases/(default)/documents/checks/'
+        + p.docRef.id + '?_=' + Date.now();
+      return fetch(restUrl, { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (json) {
+          var resultField = json.fields && json.fields.result;
+          if (!resultField || resultField.nullValue !== undefined) {
             stillPending.push(p);
             return;
           }
-          var data = querySnap.docs[0].data();
-          if (data && data.result) {
-            p.item.checkStatus = data.result;
-            resolvedAny = true;
-          } else {
-            stillPending.push(p);
-          }
+          var fields = resultField.mapValue && resultField.mapValue.fields || {};
+          var getStr = function (f) { return f && f.stringValue !== undefined ? f.stringValue : null; };
+          p.item.checkStatus = {
+            entityName: getStr(fields.entityName),
+            statusText: getStr(fields.statusText),
+            color: getStr(fields.color),
+          };
+          resolvedAny = true;
         }).catch(function (err) {
           lastErr = err && err.message ? err.message : String(err);
           stillPending.push(p);
