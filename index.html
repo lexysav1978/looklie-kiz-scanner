@@ -443,7 +443,13 @@
       renderList();
     });
   }
-  setInterval(pollPendingChecks, 1000);
+  // ВАЖНО: не setInterval — на практике замечено (Telegram WebView), что
+  // независимые JS-таймеры могут «засыпать» без недавнего пользовательского
+  // взаимодействия, и колбэк не срабатывает, пока что-то другое (например,
+  // следующий скан) не «разбудит» цикл событий. requestAnimationFrame внутри
+  // scanLoop точно не спит, пока превью камеры живо (иначе сам скан бы не
+  // работал) — поэтому опрос повешен на него же, см. scanLoop ниже.
+  var lastCheckPollAt = 0;
 
   function addCheckCode(cis) {
     if (seen[cis]) return;
@@ -586,6 +592,13 @@
 
   function scanLoop() {
     if (!stream) return;
+    if (checkMode) {
+      var nowTs = Date.now();
+      if (nowTs - lastCheckPollAt > 1000) {
+        lastCheckPollAt = nowTs;
+        pollPendingChecks();
+      }
+    }
     if (!scanning && video.videoWidth > 0) {
       scanning = true;
       var w = video.videoWidth, h = video.videoHeight;
