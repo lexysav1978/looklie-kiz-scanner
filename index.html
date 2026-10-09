@@ -105,6 +105,8 @@
   #check-status-big.found .big-dot { background: #3ddc3d; }
   #check-status-big.not-found .big-dot { background: #ff4d4d; }
   #check-status-big.warn .big-dot { background: #ffcc33; }
+  #check-status-big.darkgreen .big-dot { background: #0f7a2c; }
+  #restore-pool { display: none; padding: 6px 6px 2px; font-size: 14px; line-height: 1.4; color: rgba(255,255,255,0.8); border-top: 1px solid rgba(255,255,255,0.12); margin-top: 6px; }
   #check-status-big .big-text {
     font-size: 24px; font-weight: 600; line-height: 1.25; flex: 1;
   }
@@ -151,13 +153,14 @@
      а не старую закэшированную (WebView такое уже делал раньше в этом
      проекте, см. комментарий про SCANNER_VERSION в main.js бота).
      Увеличивать на 1 при каждом деплое, ничего сложнее. -->
-<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 3</div>
+<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 4</div>
 
 <div id="sheet">
   <div id="sheet-title">Отсканировано</div>
   <div id="empty-state">Пока пусто</div>
   <ul id="code-list"></ul>
   <div id="check-status-big"><span class="big-dot"></span><span class="big-text"></span></div>
+  <div id="restore-pool"></div>
 </div>
 
 <div id="error-banner"></div>
@@ -208,7 +211,13 @@
   // приходит обратно и показывается ПРЯМО В ЭТОМ ОКНЕ, без закрытия —
   // поэтому тут нет ни «Готово» (см. updateMainButton), ни батч-отправки:
   // каждый код независимо создаёт свой документ и подписывается на него.
-  var checkMode = new URLSearchParams(location.search).get('mode') === 'check';
+  var modeParam = new URLSearchParams(location.search).get('mode');
+  var restoreMode = modeParam === 'restore';
+  // restoreMode («Восстановление КИЗ») — тот же механизм живой проверки через
+  // Firestore, что и «Проверка КИЗ» (по одному коду, ответ на экране, опрос по
+  // REST, а не подписка — все уроки WebView те же), плюс пул «Восстановить» по
+  // юрлицам на экране и кнопка «Готово». liveMode = любой из двух.
+  var checkMode = modeParam === 'check' || restoreMode;
   var firestoreDb = null;
   if (checkMode) {
     firebase.initializeApp({
@@ -243,7 +252,7 @@
     if (!tg) return;
     // «Проверка КИЗ» — каждый код уходит независимо, партии нет, поэтому и
     // кнопки «Готово» нет вообще (по прямому указанию).
-    if (checkMode) {
+    if (checkMode && !restoreMode) {
       tg.MainButton.hide();
       return;
     }
@@ -270,6 +279,7 @@
       if (scanned.length > 0) {
         var last = scanned[scanned.length - 1];
         checkBigEl.className = last.checkStatus && last.checkStatus.color === 'green' ? 'found'
+          : last.checkStatus && last.checkStatus.color === 'darkgreen' ? 'darkgreen'
           : last.checkStatus && last.checkStatus.color === 'red' ? 'not-found'
           : last.checkStatus && last.checkStatus.color === 'yellow' ? 'warn'
           : '';
@@ -277,6 +287,7 @@
           ? (last.checkStatus.entityName ? last.checkStatus.entityName + ': ' : '') + last.checkStatus.statusText
           : '⏳ проверяю…';
       }
+      renderRestorePool();
       updateMainButton();
       var scrollTop2 = listEl.scrollTop;
       listEl.scrollTop = scrollTop2 + 1;
@@ -542,6 +553,8 @@
             entityName: getStr(fields.entityName),
             statusText: getStr(fields.statusText),
             color: getStr(fields.color),
+            kind: getStr(fields.kind),
+            inn: getStr(fields.inn),
           };
           resolvedAny = true;
         }).catch(function (err) {
@@ -567,6 +580,37 @@
   setInterval(pollPendingChecks, 1000);
   var lastCheckPollAt = 0;
 
+  // Пул «Восстановить» по юрлицам — только на один сеанс сканирования (по
+  // прямому указанию), живёт в памяти страницы. Считаем из scanned, а не
+  // копим отдельно: удалённый/повторный код не может разойтись со счётчиком.
+  var restorePoolEl = document.getElementById('restore-pool');
+  // Пул = коды с kind 'restore' (выведен по «Дистанционной продаже»),
+  // сгруппированные по юрлицу (ИНН нужен боту для будущей отправки в ЧЗ).
+  function buildRestorePool() {
+    var groups = {};
+    var order = [];
+    scanned.forEach(function (it) {
+      var st = it.checkStatus;
+      if (st && st.kind === 'restore' && st.inn) {
+        if (!groups[st.inn]) {
+          groups[st.inn] = { inn: st.inn, entity: st.entityName || st.inn, cis: [] };
+          order.push(st.inn);
+        }
+        groups[st.inn].cis.push(it.cis);
+      }
+    });
+    return order.map(function (inn) { return groups[inn]; });
+  }
+  function renderRestorePool() {
+    if (!restoreMode) return;
+    var pool = buildRestorePool();
+    var total = pool.reduce(function (sum, g) { return sum + g.cis.length; }, 0);
+    restorePoolEl.style.display = 'block';
+    restorePoolEl.textContent = total === 0
+      ? 'Пул «Восстановить»: пока пусто'
+      : 'Пул «Восстановить» (' + total + '): ' + pool.map(function (g) { return g.entity + ' — ' + g.cis.length; }).join(', ');
+  }
+
   function addCheckCode(cis) {
     if (seen[cis] || waitingForAnswer) return;
     seen[cis] = true;
@@ -580,6 +624,7 @@
 
     firestoreDb.collection('checks').add({
       cis: cis,
+      mode: restoreMode ? 'restore' : 'check',
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       result: null,
     }).then(function (docRef) {
@@ -695,6 +740,15 @@
   if (tg) {
     tg.MainButton.onClick(function () {
       if (scanned.length === 0) return;
+      if (restoreMode) {
+        // Ответ на последний скан ещё не пришёл — его код не попал бы в пул.
+        if (waitingForAnswer) {
+          tg.HapticFeedback.notificationOccurred('warning');
+          return;
+        }
+        tg.sendData(JSON.stringify({ pool: buildRestorePool() }));
+        return;
+      }
       var payload = scanned.map(function (s) { return s.cis; });
       tg.sendData(JSON.stringify(payload));
     });
