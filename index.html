@@ -153,7 +153,7 @@
      а не старую закэшированную (WebView такое уже делал раньше в этом
      проекте, см. комментарий про SCANNER_VERSION в main.js бота).
      Увеличивать на 1 при каждом деплое, ничего сложнее. -->
-<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 5</div>
+<div id="build-tag" style="position:fixed; left:6px; bottom:6px; z-index:9999; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:6px;">build 6</div>
 
 <div id="sheet">
   <div id="sheet-title">Отсканировано</div>
@@ -623,8 +623,11 @@
     renderList();
 
     firestoreDb.collection('checks').add({
-      cis: cis,
-      mode: restoreMode ? 'restore' : 'check',
+      // ВАЖНО: правила Firestore пропускают ТОЛЬКО поля cis/createdAt/result —
+      // любое дополнительное поле (пробовали mode) даёт 403 и «ошибка
+      // отправки» на экране и в «Проверке КИЗ». Режим восстановления
+      // передаём префиксом «R|» в самом cis (бот его снимает).
+      cis: restoreMode ? 'R|' + cis : cis,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       result: null,
     }).then(function (docRef) {
